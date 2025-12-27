@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -e
+
+# Get staged Python files
+FILES=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.py$' || true)
+
+if [ -z "$FILES" ]; then
+  exit 0
+fi
+
+echo "Running isort..."
+isort $FILES
+
+echo "Running black..."
+black $FILES
+
+# Re-stage files after formatting
+git add $FILES
+
+echo "Running ruff..."
+if ! ruff check $FILES; then
+  echo
+  echo "❌ Ruff linting failed. Commit aborted."
+  exit 1
+fi
+
+echo "✅ Pre-commit checks passed."
+exit 0
