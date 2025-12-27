@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [ '**' ]          # all branches
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.3'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Ruff lint
+        id: ruff
+        run: |
+          # Adjust the target directory / files as needed
+          ruff check .
+        continue-on-error: false   # fail the job if linting fails
+
+      - name: Run tests
+        id: tests
+        run: |
+          pytest                # add any flags you normally use
+        continue-on-error: false   # fail the job if tests fail
