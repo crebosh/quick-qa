@@ -7,13 +7,14 @@ from typing import Optional, Union
 
 import jsonschema
 import requests
+from loguru import logger
 from requests import PreparedRequest, Response, Session
 
 
 class Method(Enum):
     POST = "POST"
     PATCH = "PATCH"
-    UPDATE = "UPDATE"
+    PUT = "PUT"
     GET = "GET"
     DELETE = "DELETE"
 
@@ -22,6 +23,9 @@ class BaseEndpoint:
     """Class that holds functionality for working with endpoints"""
 
     _session: Session = Session()  # shared connection pool
+
+    path_url = "/mypath"
+    method = Method.GET
 
     expected_schema = {}
     """Schema to compare against results. Overide in Concrete.
@@ -39,9 +43,9 @@ class BaseEndpoint:
     } 
     """
 
-    def __init__(self, method: Method, url: str):
-        self.method = method
-        self.url = url
+    def __init__(self, base_url: str):
+        self.base_url = base_url
+        self.url = base_url + self.path_url
 
     def _build_request(
         self, data: Optional[dict] = None, json: Optional[str] = None
@@ -92,5 +96,13 @@ class BaseEndpoint:
         Returns:
             bool: errors are thrown if schema is invalidated
         """
-        jsonschema.validate(instance=response.json(), schema=self.expected_schema)
-        return True
+        try:
+            jsonschema.validate(instance=response.json(), schema=self.expected_schema)
+            return True
+        except Exception as e:
+            logger.debug(response.json())
+            raise e
+
+    def ping(self) -> bool:
+        res = requests.options(self.url)
+        return res.status_code == 200
