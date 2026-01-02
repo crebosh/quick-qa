@@ -2,21 +2,11 @@
 
 from __future__ import annotations
 
-from enum import Enum
-from typing import Optional, Union
+from typing import Union
 
 import jsonschema
 import requests
-from loguru import logger
-from requests import PreparedRequest, Response, Session
-
-
-class Method(Enum):
-    POST = "POST"
-    PATCH = "PATCH"
-    PUT = "PUT"
-    GET = "GET"
-    DELETE = "DELETE"
+from requests import Response, Session
 
 
 class BaseEndpoint:
@@ -24,10 +14,9 @@ class BaseEndpoint:
 
     _session: Session = Session()  # shared connection pool
 
-    path_url = "/mypath"
-    method = Method.GET
+    path_url: Union[str, None] = None
 
-    expected_schema = {}
+    expected_schema: dict = {}
     """Schema to compare against results. Overide in Concrete.
 
     Example:
@@ -45,64 +34,46 @@ class BaseEndpoint:
 
     def __init__(self, base_url: str):
         self.base_url = base_url
-        self.url = base_url + self.path_url
+        if self.path_url is None:
+            raise TypeError("no path_url set")
+        self.endpoint_url: str = base_url + self.path_url
 
-    def _build_request(
-        self, data: Optional[dict] = None, json: Optional[str] = None
-    ) -> PreparedRequest:
-        if data is not None and json is not None:
-            raise ValueError("Supply either `data` or `json`, not both")
-        if data:
-            req = requests.Request(method=self.method.value, url=self.url, data=data)
-        elif json:
-            req = requests.Request(method=self.method.value, url=self.url, json=json)
-        else:
-            req = requests.Request(method=self.method.value, url=self.url)
-
-        prepared = req.prepare()
-        return prepared
-
-    def _send(self, prepared_request: PreparedRequest) -> Response:
-        respose = self._session.send(request=prepared_request)
-        return respose
-
-    def execute(self, payload: Optional[Union[dict, str]] = None) -> Response:
-        """executes your api calls\n
-           dictionary payloads will use data and string will use json
-
-        Args:
-            payload (Optional[Union[dict, str]], optional): . Defaults to None.
-
-        Returns:
-            Response: _description_
-        """
-        match payload:
-            case dict():
-                prepared_request = self._build_request(data=payload)
-            case str():
-                prepared_request = self._build_request(json=payload)
-            case _:
-                prepared_request = self._build_request()
-
-        res = self._send(prepared_request)
-        return res
-
-    def valid_schema(self, response: Response):
+    def valid_schema(self, response: Response) -> Union[bool, Exception]:
         """Validates the schema
 
         Args:
-            response (Response): use the output from execute method
+            response (Response): enter a Response Object
 
         Returns:
             bool: errors are thrown if schema is invalidated
+            Exception: if validation raises an error the error is caught and passed as a return
         """
         try:
             jsonschema.validate(instance=response.json(), schema=self.expected_schema)
             return True
         except Exception as e:
-            logger.debug(response.json())
-            raise e
+            return e
 
     def ping(self) -> bool:
-        res = requests.options(self.url)
-        return res.status_code == 200
+        """runs an options call and checks for 200
+
+        Returns:
+            bool: True if 200 status code
+        """
+        acceptable_status_codes = [200, 204]
+        res = requests.options(self.endpoint_url)
+        return res.status_code in acceptable_status_codes
+
+    def allowed_methods(self) -> Union[list, None]:
+        """returns a list of allowed mehods unless the api.
+        returns None if the api does not include the header in the response
+
+        Returns:
+            Union[list, None]
+        """
+        res = requests.options(self.endpoint_url)
+        headers = res.headers
+        allowed_string = headers.get("Allow")
+        if allowed_string:
+            return allowed_string.split()
+        return None
