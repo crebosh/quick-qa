@@ -1,86 +1,85 @@
 import pytest
 from pytest_mock.plugin import MockerFixture
 
-from quick_qa.api.core import BaseEndpoint, Method, PreparedRequest, Response
+from quick_qa.api.core import BaseEndpoint, Response, Session
+
+
+@pytest.fixture(autouse=True)
+def run_after_each_test():
+    yield
+    BaseEndpoint.path_url = None
 
 
 @pytest.fixture
-def endpoint_url():
-    url = "http://www.demo_url.com/"
+def base_url():
+    url = "http://www.mybaseurl.com"
     yield url
 
 
-@pytest.mark.parametrize(
-    "payload, expected_body",
-    [
-        ({"name": "john", "age": 32}, "name=john&age=32"),
-        ('{"name":"john","age":32}', b'"{\\"name\\":\\"john\\",\\"age\\":32}"'),
-        (None, None),
-    ],
-)
-def test_build_request(payload, expected_body, endpoint_url):
-    be = BaseEndpoint(Method.POST, endpoint_url)
-    if isinstance(payload, dict):
-        pr = be._build_request(data=payload)
-    elif isinstance(payload, str):
-        pr = be._build_request(json=payload)
-    else:
-        pr = be._build_request()
-
-    assert isinstance(pr, PreparedRequest)
-    assert pr.method == Method.POST.value
-    assert pr.url == endpoint_url
-    assert pr.body == expected_body
+@pytest.fixture
+def base_endpoint(base_url):
+    BaseEndpoint.path_url = "/mypath"
+    be = BaseEndpoint(base_url)
+    yield be
+    BaseEndpoint.path_url = None
 
 
-def test_build_request_throws_error(endpoint_url):
-    data = {"name": "john", "age": 32}
-    json = '{"name":"john","age":32}'
-    be = BaseEndpoint(Method.POST, endpoint_url)
+class TestBaseEndpoint:
+    def test_base_endpoint_init(self, base_url):
+        path_url = "/myPath"
+        BaseEndpoint.path_url = path_url
+        be = BaseEndpoint(base_url=base_url)
 
-    with pytest.raises(ValueError, match="Supply either `data` or `json`, not both"):
-        be._build_request(data=data, json=json)
+        assert isinstance(be._session, Session)
+        assert be.base_url == base_url
+        assert be.path_url == path_url
+        assert be.endpoint_url == base_url + path_url
+        assert be.expected_schema == {}
 
+    def test_base_endpoint_init_error(self, base_url):
+        with pytest.raises(TypeError, match="no path_url set"):
+            BaseEndpoint(base_url)
 
-def test_send(mocker: MockerFixture, endpoint_url):
-    mock_prepared_request = mocker.Mock(spec=PreparedRequest)
-    mock_session = mocker.patch("quick_qa.api.core.BaseEndpoint._session")
-    mock_session.send.return_value = Response()
-
-    be = BaseEndpoint(method=Method.GET, url=endpoint_url)
-    response = be._send(mock_prepared_request)
-
-    mock_session.send.assert_called_once_with(request=mock_prepared_request)
-    assert isinstance(response, Response)
-
-
-def test_valid_schema(mocker: MockerFixture, endpoint_url):
-    mock_jsonschema = mocker.patch("quick_qa.api.core.jsonschema")
-    mock_jsonschema.validate.return_value = None
-    mock_response = mocker.Mock(spec=Response)
-
-    be = BaseEndpoint(Method.POST, endpoint_url)
-
-    result = be.valid_schema(mock_response)
-
-    mock_jsonschema.validate.assert_called_once_with(
-        instance=mock_response.json(), schema=BaseEndpoint.expected_schema
+    @pytest.mark.parametrize(
+        "side_effect, result",
+        [(TypeError("my error"), TypeError("my error")), (None, True)],
     )
-    assert result is True
+    def test_valid_schema(
+        self, side_effect, result, mocker: MockerFixture, base_endpoint
+    ):
+        mock_jsonschema = mocker.patch("quick_qa.api.core.jsonschema")
+        mock_jsonschema.validate.return_value = None
+        mock_jsonschema.validate.side_effect = side_effect
+        mock_response = mocker.Mock(spec=Response)
 
+        result = base_endpoint.valid_schema(mock_response)
 
-def test_execute(mocker: MockerFixture, endpoint_url):
-    mock_build = mocker.patch.object(BaseEndpoint, "_build_request")
-    mock_send = mocker.patch.object(BaseEndpoint, "_send")
-    mock_prepared_req = mocker.Mock(spec=PreparedRequest)
-    mock_res = mocker.Mock(spec=Response)
-    mock_build.return_value = mock_prepared_req
-    mock_send.return_value = mock_res
+        mock_jsonschema.validate.assert_called_once_with(
+            instance=mock_response.json(), schema=BaseEndpoint.expected_schema
+        )
+        assert result is result
 
-    be = BaseEndpoint(Method.PATCH, endpoint_url)
-    res = be.execute(payload={"name": "john", "age": 32})
+    @pytest.mark.parametrize("code, expected_ping_result", [(200, True), (404, False)])
+    def test_ping(
+        self, code, expected_ping_result, mocker: MockerFixture, base_endpoint
+    ):
+        mock_optionscall = mocker.patch("quick_qa.api.core.requests.options")
+        mock_response = mocker.Mock(spec=Response)
+        mock_optionscall.return_value = mock_response
 
-    mock_build.assert_called_once_with(data={"name": "john", "age": 32})
-    mock_send.assert_called_once_with(mock_prepared_req)
-    assert res == mock_res
-    assert isinstance(res, Response), f"Expected type: Response but got ({type(res)})"
+        mock_response.status_code = code
+        up = base_endpoint.ping()
+
+        mock_optionscall.assert_called_once_with(base_endpoint.endpoint_url)
+        assert up is expected_ping_result
+
+    def test_allowed_methods(self, mocker: MockerFixture, base_endpoint):
+        expected_methods = ["options", "get", "post"]
+        mock_response = mocker.Mock(spec=Response)
+        mock_response.headers = {"Allow": "options,get,post"}
+        mock_optionscall = mocker.patch("quick_qa.api.core.requests.options")
+        mock_optionscall.return_value = mock_response
+
+        methods = base_endpoint.allowed_methods()
+
+        assert methods.sort() == expected_methods.sort()
