@@ -1,3 +1,5 @@
+from unittest.mock import PropertyMock
+
 import pytest
 from pytest_mock import MockerFixture
 from selenium.webdriver.common.by import By
@@ -36,23 +38,28 @@ class TestPage:
             class NewPage(Page):
                 pass
 
-    def test_find(self, mock_driverstore, mock_driver, mock_element):
+    def test_find(self, mock_driverstore, mock_driver, mock_element, mocker):
         mock_driver.find_element.return_value = mock_element
         mock_driverstore.return_value = mock_driver
+        mock_wait = mocker.patch("quick_qa.web.pom.wait")
+
         locator = (By.ID, "myid")
 
         my_page = MyPage()
         result = my_page.find(locator=locator, timeout=None)
 
+        mock_wait.assert_called_once()
         mock_driver.find_element.assert_called_once_with(*locator)
         assert result == mock_element
 
     def test_navigate_to(self, mocker: MockerFixture, mock_driverstore, mock_driver):
         mock_driverstore.return_value = mock_driver
+        mock_wait = mocker.patch("quick_qa.web.pom.wait")
 
         mp = MyPage()
         mp.navigate_to()
 
+        mock_wait.assert_called_once()
         mock_driver.get.assert_called_once_with(mp.url)
 
 
@@ -65,19 +72,24 @@ class TestComponent:
         assert c._root_locator == locator
         assert c._timeout == timeout
 
-    def test_find(self, mocker, mock_driverstore, mock_driver, mock_element):
+    def test_find(self, mocker: MockerFixture, mock_element):
         locator = (By.ID, "mycomponentid")
         timeout = 3.0
-        element_locator = (By.ID, "myid2")
-        new_mock_element = mocker.Mock(spec=WebElement)
+        expected_element = mocker.Mock(spec=WebElement)
+        mock_element.find_element.return_value = expected_element
+        mc = Component(locator=(), timeout=2)
 
-        mock_driverstore.return_value = mock_driver
-        mock_driver.find_element.return_value = mock_element
-        mock_element.find_element.return_value = new_mock_element
+        mock_root = mocker.patch.object(
+            Component,
+            "root",
+            new_callable=PropertyMock,
+        )
+        mock_root.return_value = mock_element
+        mock_wait = mocker.patch("quick_qa.web.pom.wait")
 
-        mc = Component(locator=locator, timeout=timeout)
-        result = mc.find(locator=element_locator, timeout=timeout)
+        e = mc.find(locator, timeout)
 
-        assert result == new_mock_element
-        mock_driver.find_element.assert_called_once_with(*locator)
-        mock_element.find_element.assert_called_once_with(*element_locator)
+        mock_root.assert_called_once()
+        mock_wait.assert_called_once()
+        mock_element.find_element.assert_called_once()
+        assert e == expected_element

@@ -22,13 +22,20 @@ class TestElement:
         assert result._parent == mock_webelement
         assert result.name == name
 
-    def test_click(self, element_obj):
+    def test_click(self, mocker, element_obj):
+        mock_wait = mocker.patch("quick_qa.web.element.wait")
+
         element_obj.click()
 
+        mock_wait.assert_called_once()
         element_obj._parent.click.assert_called_once()
 
-    def test_send_keys(self, element_obj):
+    def test_send_keys(self, element_obj, mocker):
+        mock_wait = mocker.patch("quick_qa.web.element.wait")
+
         text = "mytext"
+
         element_obj.send_keys(text=text)
 
+        mock_wait.assert_called_once()
         element_obj._parent.send_keys.assert_called_once_with(text)

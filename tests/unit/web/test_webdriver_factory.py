@@ -1,10 +1,11 @@
 import pytest
 from pytest_mock.plugin import MockerFixture
 from selenium.webdriver import ChromeOptions, FirefoxOptions
+from selenium.webdriver.remote.webdriver import WebDriver
 
 from quick_qa.web.webdriver_factory import (
-    BrowserOptions,
-    BrowserOptionsBuilder,
+    BrowserOptionsSpec,
+    BrowserOptionsSpecBuilder,
     BrowserType,
     ChromeBuilder,
     FirefoxBuilder,
@@ -13,15 +14,15 @@ from quick_qa.web.webdriver_factory import (
 
 class TestBrowserOptionsBuilder:
     def test_create(self):
-        result = BrowserOptionsBuilder.create()
+        result = BrowserOptionsSpecBuilder.create()
 
-        assert isinstance(result, BrowserOptionsBuilder)
+        assert isinstance(result, BrowserOptionsSpecBuilder)
 
     @pytest.mark.parametrize(
         "browser_type", [(BrowserType.CHROME), (BrowserType.FIREFOX)]
     )
     def test_set_browser_type(self, browser_type):
-        result = BrowserOptionsBuilder.create().set_browser_type(browser_type)
+        result = BrowserOptionsSpecBuilder.create().set_browser_type(browser_type)
 
         assert result._browser_type == browser_type
 
@@ -33,7 +34,7 @@ class TestBrowserOptionsBuilder:
         ],
     )
     def test_set_headless(self, value, expected):
-        result = BrowserOptionsBuilder.create().set_headless(value=value)
+        result = BrowserOptionsSpecBuilder.create().set_headless(value=value)
 
         assert result._headless is expected
 
@@ -50,12 +51,12 @@ class TestBrowserOptionsBuilder:
     )
     def test_build(self, browser_type, headless, expected_headless):
         if headless is None:
-            options_builder = BrowserOptionsBuilder.create().set_browser_type(
+            options_builder = BrowserOptionsSpecBuilder.create().set_browser_type(
                 browser_type
             )
         else:
             options_builder = (
-                BrowserOptionsBuilder.create()
+                BrowserOptionsSpecBuilder.create()
                 .set_browser_type(browser_type)
                 .set_headless(headless)
             )
@@ -69,98 +70,164 @@ class TestBrowserOptionsBuilder:
         with pytest.raises(
             ValueError, match="Browser type must be specified before building."
         ):
-            BrowserOptionsBuilder.create().build()
+            BrowserOptionsSpecBuilder.create().build()
 
 
 class TestChromeBuilder:
     def test_init(self, mocker: MockerFixture):
-        mock_browseroptions = mocker.Mock(spec=BrowserOptions)
-        mock_browseroptions.headless = True
+        mock_browseroptionsspec = mocker.Mock(spec=BrowserOptionsSpec)
+        cb = ChromeBuilder(mock_browseroptionsspec)
 
-        mock_chromeoptions_cls = mocker.patch(
-            "quick_qa.web.webdriver_factory.ChromeOptions",
-            spec=ChromeOptions,
+        assert cb._opts_spec == mock_browseroptionsspec
+        assert isinstance(cb.options, ChromeOptions)
+
+    @pytest.mark.parametrize(
+        "options_spec, expected_windowsize, expected_headless",
+        [
+            (
+                BrowserOptionsSpec(
+                    browser_type=BrowserType.CHROME, window_size="full", headless=False
+                ),
+                "--start-maximized",
+                None,
+            ),
+            (
+                BrowserOptionsSpec(
+                    browser_type=BrowserType.CHROME,
+                    window_size=(1920, 1280),
+                    headless=False,
+                ),
+                "--window-size=1920,1280",
+                None,
+            ),
+            (
+                BrowserOptionsSpec(
+                    browser_type=BrowserType.CHROME, window_size=None, headless=False
+                ),
+                None,
+                None,
+            ),
+            (
+                BrowserOptionsSpec(
+                    browser_type=BrowserType.CHROME, window_size=None, headless=True
+                ),
+                None,
+                "--headless",
+            ),
+        ],
+    )
+    def test_build_options(
+        self,
+        options_spec: BrowserOptionsSpec,
+        expected_windowsize,
+        expected_headless,
+        mocker: MockerFixture,
+    ):
+        mock_chrome_options = mocker.Mock(ChromeOptions)
+        mock_chrome_options_cls = mocker.patch(
+            "quick_qa.web.webdriver_factory.ChromeOptions"
         )
-        mock_chromeoptions_obj = mocker.Mock(spec=ChromeOptions)
-        mock_chromeoptions_cls.return_value = mock_chromeoptions_obj
+        mock_chrome_options_cls.return_value = mock_chrome_options
 
-        chrome_builder = ChromeBuilder(mock_browseroptions)
+        cb = ChromeBuilder(options_spec)
+        cb._build_options()
 
-        assert chrome_builder.opts == mock_browseroptions
-        assert isinstance(chrome_builder.options, ChromeOptions)
-        chrome_builder.options.add_argument.assert_called_once_with("--headless")
+        if options_spec.window_size:
+            mock_chrome_options.add_argument.assert_called_with(expected_windowsize)
+        if options_spec.headless:
+            mock_chrome_options.add_argument.asset_called_with(expected_headless)
 
     def test_build(self, mocker: MockerFixture):
-        mock_browseroptions = mocker.Mock(spec=BrowserOptions)
-
-        mock_chromeoptions_cls = mocker.patch(
-            "quick_qa.web.webdriver_factory.ChromeOptions",
-            autospec=True,
+        mock_browseroptionssec = mocker.Mock(spec=BrowserOptionsSpec)
+        mock_driver = mocker.Mock(spec=WebDriver)
+        mock_chrome_cls = mocker.patch(
+            "quick_qa.web.webdriver_factory.webdriver.Chrome"
         )
-        mock_chromeoptions_obj = mocker.Mock()
-        mock_chromeoptions_cls.return_value = mock_chromeoptions_obj
+        mock_chrome_cls.return_value = mock_driver
 
-        mock_chrome_ctor = mocker.patch(
-            "quick_qa.web.webdriver_factory.webdriver.Chrome",
-            autospec=True,
-        )
-        mock_chrome_obj = mocker.Mock()
-        mock_chrome_ctor.return_value = mock_chrome_obj
+        cb = ChromeBuilder(mock_browseroptionssec)
+        bo = mocker.patch.object(cb, "_build_options")
+        result = cb.build()
 
-        builder = ChromeBuilder(mock_browseroptions)
-        result = builder.build()
-
-        assert (
-            result is mock_chrome_obj
-        ), "build() should return the webdriver.Chrome mock"
-
-        mock_chrome_ctor.assert_called_once_with(options=mock_chromeoptions_obj)
-
-        assert builder.options is mock_chromeoptions_obj
+        bo.assert_called_once()
+        assert result == mock_driver
 
 
 class TestFirefoxBuilder:
     def test_init(self, mocker: MockerFixture):
-        mock_browseroptions = mocker.Mock(spec=BrowserOptions)
-        mock_browseroptions.headless = True
+        mock_browseroptionsspec = mocker.Mock(spec=BrowserOptionsSpec)
+        cb = FirefoxBuilder(mock_browseroptionsspec)
 
-        mock_firefoxoptions_cls = mocker.patch(
-            "quick_qa.web.webdriver_factory.FirefoxOptions",
-            spec=FirefoxOptions,
+        assert cb._opts_spec == mock_browseroptionsspec
+        assert isinstance(cb.options, FirefoxOptions)
+
+    @pytest.mark.parametrize(
+        "options_spec, expected_windowsize, expected_headless",
+        [
+            (
+                BrowserOptionsSpec(
+                    browser_type=BrowserType.FIREFOX, window_size="full", headless=False
+                ),
+                "--start-maximized",
+                None,
+            ),
+            (
+                BrowserOptionsSpec(
+                    browser_type=BrowserType.FIREFOX,
+                    window_size=(1920, 1280),
+                    headless=False,
+                ),
+                "--window-size=1920,1280",
+                None,
+            ),
+            (
+                BrowserOptionsSpec(
+                    browser_type=BrowserType.FIREFOX, window_size=None, headless=False
+                ),
+                None,
+                None,
+            ),
+            (
+                BrowserOptionsSpec(
+                    browser_type=BrowserType.FIREFOX, window_size=None, headless=True
+                ),
+                None,
+                "--headless",
+            ),
+        ],
+    )
+    def test_build_options(
+        self,
+        options_spec: BrowserOptionsSpec,
+        expected_windowsize,
+        expected_headless,
+        mocker: MockerFixture,
+    ):
+        mock_firefox_options = mocker.Mock(FirefoxOptions)
+        mock_firefox_options_cls = mocker.patch(
+            "quick_qa.web.webdriver_factory.FirefoxOptions"
         )
-        mock_firefoxoptions_obj = mocker.Mock(spec=FirefoxOptions)
-        mock_firefoxoptions_cls.return_value = mock_firefoxoptions_obj
+        mock_firefox_options_cls.return_value = mock_firefox_options
 
-        firefox_builder = FirefoxBuilder(mock_browseroptions)
+        fb = FirefoxBuilder(options_spec)
+        fb._build_options()
 
-        assert firefox_builder.opts == mock_browseroptions
-        assert isinstance(firefox_builder.options, FirefoxOptions)
-        firefox_builder.options.add_argument.assert_called_once_with("--headless")
+        if options_spec.window_size:
+            mock_firefox_options.add_argument.assert_called_with(expected_windowsize)
+        if options_spec.headless:
+            mock_firefox_options.add_argument.asset_called_with(expected_headless)
 
     def test_build(self, mocker: MockerFixture):
-        mock_browseroptions = mocker.Mock(spec=BrowserOptions)
-
-        mock_firefoxoptions_cls = mocker.patch(
-            "quick_qa.web.webdriver_factory.FirefoxOptions",
-            autospec=True,
+        mock_browseroptionssec = mocker.Mock(spec=BrowserOptionsSpec)
+        mock_driver = mocker.Mock(spec=WebDriver)
+        mock_chrome_cls = mocker.patch(
+            "quick_qa.web.webdriver_factory.webdriver.Firefox"
         )
-        mock_firefoxoptions_obj = mocker.Mock()
-        mock_firefoxoptions_cls.return_value = mock_firefoxoptions_obj
+        mock_chrome_cls.return_value = mock_driver
 
-        mock_firefox_ctor = mocker.patch(
-            "quick_qa.web.webdriver_factory.webdriver.Firefox",
-            autospec=True,
-        )
-        mock_firefox_obj = mocker.Mock()
-        mock_firefox_ctor.return_value = mock_firefox_obj
+        fb = FirefoxBuilder(mock_browseroptionssec)
+        bo = mocker.patch.object(fb, "_build_options")
+        result = fb.build()
 
-        builder = FirefoxBuilder(mock_browseroptions)
-        result = builder.build()
-
-        assert (
-            result is mock_firefox_obj
-        ), "build() should return the webdriver.Chrome mock"
-
-        mock_firefox_ctor.assert_called_once_with(options=mock_firefoxoptions_obj)
-
-        assert builder.options is mock_firefoxoptions_obj
+        bo.assert_called_once()
+        assert result == mock_driver
