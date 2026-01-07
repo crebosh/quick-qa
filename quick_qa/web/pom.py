@@ -2,16 +2,28 @@ from __future__ import annotations
 
 from typing import Optional, Union, overload
 
+from loguru import logger
+from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.common.by import By as _By
 from selenium.webdriver.remote.webelement import WebElement
 
 from quick_qa.web import driver_store
+from quick_qa.web.config import Config
 from quick_qa.web.element import Element
+from quick_qa.web.waits import DocumentReady, JQueryInactive, NetworkIdle, wait
 
 
-def _driver_find_element(locator: tuple, timeout=None) -> WebElement:
+def DEFAULT_FIND_TIMEOUT():
+    return Config.timeouts["find"]
+
+
+def _find(
+    locator: tuple, timeout: Optional[float] = None, parent: Optional[WebElement] = None
+) -> WebElement:
     """find helper for basic find element logic."""
-    driver = driver_store.get_driver()
+    timeout = timeout or DEFAULT_FIND_TIMEOUT()
+    driver = parent or driver_store.get_driver()
+    wait(driver, timeout, lambda d: d.find_element(*locator))
     return driver.find_element(*locator)
 
 
@@ -41,13 +53,22 @@ class Page:
         Returns:
             WebElement:
         """
-        element = _driver_find_element(locator, timeout)
-        return element
+        try:
+            element = _find(locator=locator, timeout=timeout)
+            return element
+        except TimeoutException:
+            logger.error(f"timed out trying to find element at: {locator}")
+            raise
 
     def navigate_to(self):
         """navigates to page"""
         driver = driver_store.get_driver()
+        self.wait_for_load()
         driver.get(self.url)
+
+    def wait_for_load(self):
+        driver = driver_store.get_driver()
+        wait(driver, 10.0, DocumentReady(), JQueryInactive(), NetworkIdle())
 
 
 class Component:
@@ -70,8 +91,14 @@ class Component:
         Returns:
             WebElement:
         """
-        root = _driver_find_element(self._root_locator, self._timeout)
-        return root
+        try:
+            root = _find(locator=self._root_locator, timeout=self._timeout)
+            return root
+        except TimeoutException:
+            logger.error(
+                f"timed out finding root element for componet: {self._root_locator}"
+            )
+            raise
 
     def find(self, locator: tuple, timeout: Optional[float] = None) -> WebElement:
         """find element from element
@@ -83,8 +110,15 @@ class Component:
         Returns:
             WebElement:
         """
-        element = self.root.find_element(*locator)
-        return element
+        timeout = timeout or DEFAULT_FIND_TIMEOUT()
+        try:
+            root = self.root
+            wait(root, timeout, lambda d: d.find_element(*locator))
+            element = root.find_element(*locator)
+            return element
+        except TimeoutException:
+            logger.error(f"timeout out finding element from component at: {locator}")
+            raise
 
 
 class Locator:
